@@ -87,10 +87,11 @@ def build_models(opts, tmp_get_old=False):
         opts,
         nfilter=opts.nfilterD
     )
-    if opts.gpu is not None and not opts.gpu < 0 :
+    if opts.gpu is not None and isinstance(opts.gpu, int) and opts.gpu >= 0:
         return generator.cuda(opts.gpu), discriminator.cuda(opts.gpu)
     else:
         return generator, discriminator
+    
 
 def weights_init(m):
     if isinstance(m, MyConvo2d):
@@ -163,20 +164,18 @@ def check_arg(opts, arg):
         return False
 
 def check_gpu(gpu, *args):
-    '''
-    '''
-    if gpu == None or gpu < 0:
+    if gpu is None or isinstance(gpu, torch.device) and gpu.type == 'cpu' or (isinstance(gpu, int) and gpu < 0):
         if isinstance(args[0], dict):
             d = args[0]
             var_dict = {}
             for key in d:
-                var_dict[key] = Variable(d[key])
+                var_dict[key] = Variable(d[key])  # Move to CPU (default)
             if len(args) > 1:
                 return [var_dict] + check_gpu(gpu, *args[1:])
             else:
                 return [var_dict]
         if isinstance(args[0], list):
-            return [Variable(a) for a in args[0]]
+            return [Variable(a) for a in args[0]]  # Move to CPU (default)
         # a list of arguments
         if len(args) > 1:
             return [Variable(a) for a in args]
@@ -184,22 +183,22 @@ def check_gpu(gpu, *args):
             return Variable(args[0])
 
     else:
+        # If GPU is available, move to GPU
         if isinstance(args[0], dict):
             d = args[0]
             var_dict = {}
             for key in d:
-                var_dict[key] = Variable(d[key]).cuda(gpu)
+                var_dict[key] = Variable(d[key]).cuda(gpu)  # Move to GPU
             if len(args) > 1:
                 return [var_dict] + check_gpu(gpu, *args[1:])
             else:
                 return [var_dict]
         if isinstance(args[0], list):
-            return [Variable(a).cuda(gpu) for a in args[0]]
-        # a list of arguments
+            return [Variable(a).cuda(gpu) for a in args[0]]  # Move to GPU
         if len(args) > 1:
             return [Variable(a).cuda(gpu) for a in args]
         else:
-            return Variable(args[0].cuda(gpu))
+            return Variable(args[0]).cuda(gpu)  # Move to GPU
 
 def rescale(x):
     return (x + 1) * 0.5

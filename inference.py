@@ -1,8 +1,3 @@
-"""
-Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
-Licensed under the NVIDIA Source Code License. See LICENSE at https://github.com/nv-tlabs/GameGAN_code.
-Authors: Seung Wook Kim, Yuhao Zhou, Jonah Philion, Antonio Torralba, Sanja Fidler
-"""
 import os
 import sys
 import torch
@@ -18,20 +13,12 @@ import numpy as np
 import keyboard
 import time
 
-
-# Workaround for PyTorch issue on Windows
-if os.name == 'nt':
-    import ctypes
-    ctypes.cdll.LoadLibrary('caffe2_nvrtc.dll')
-
-
-def inference(gpu, opts):
-
+def inference(device, opts):
     # Initialize values
     opts = copy.deepcopy(opts)
     opts.img_size = (opts.img_size, opts.img_size)
     warm_up = opts.warm_up
-    opts.gpu = gpu
+    opts.gpu = device
     if opts.data is not None:
         opts.num_data_types = len(opts.data.split('-'))
 
@@ -47,7 +34,9 @@ def inference(gpu, opts):
                         sf.write(lf.read())
 
     # Load the model
+    # choose cpu
     saved_model = torch.load(opts.saved_model, map_location='cpu')
+
     opts_data = opts.data
     opts_img = opts.inference_image_path
     base_imgs = opts.show_base_images
@@ -56,12 +45,11 @@ def inference(gpu, opts):
     opts = saved_model['opts']
     if opts_data is not None:
         opts.data = opts_data
-    #if opts_img is not None:
     opts.inference_image_path = opts_img
     opts.show_base_images = base_imgs
     opts.upsample_model = upsample_model
     opts.playback_fps = playback_fps
-    opts.gpu = gpu
+    opts.gpu = device
     if type(opts.img_size) == int:
         opts.img_size = [opts.img_size] * 2
     opts.log_dir = log_dir
@@ -88,22 +76,23 @@ def inference(gpu, opts):
 
     # Initialize torch
     torch.manual_seed(opts.seed)
-    torch.cuda.set_device(gpu)
-
-    # Create the generator model and load it;s state from the checkpoint
+    
+    # Create the generator model and load its state from the checkpoint
     netG, _ = utils.build_models(opts)
     utils.load_my_state_dict(netG, saved_model['netG'])
+
+    # Move the model to the selected device (CPU or GPU)
+    netG.to(device)
 
     # Initialize the noise generator
     zdist = utils.get_zdist('gaussian', opts.z)
 
-    # For "playing", we want teh batch size of 1
+    # For "playing", we want the batch size of 1
     opts.bs = 1
     batch_size = opts.bs
 
     if opts.inference_image_path is None:
         # Load the dataset so we can get some initial image
-        ##!! Replace with some examle set-aside images
         train_loader = dataloader.get_custom_dataset(opts, set_type=0, getLoader=True)
         data_iters, train_len = [], 99999999999
         data_iters.append(iter(train_loader))
@@ -116,19 +105,14 @@ def inference(gpu, opts):
         img = (np.transpose(img, axes=(2, 0, 1)) / 255.).astype('float32')
         img = (img - 0.5) / 0.5
 
-        states = [torch.tensor([img], dtype=torch.float32).cuda()]
-        actions = [torch.tensor(no_action if no_action is not None else action_left, dtype=torch.float32).cuda()]
+        states = [torch.tensor([img], dtype=torch.float32).to(device)]  # Move to device
+        actions = [torch.tensor(no_action if no_action is not None else action_left, dtype=torch.float32).to(device)]  # Move to device
 
     # Disable gradients, we'll perform just the inference
     utils.toggle_grad(netG, False)
     netG.eval()
 
-    # Disable warmup
     warm_up = 0
-
-    # Temporary, to save predictions as videos
-    #fourcc = cv2.VideoWriter_fourcc(*'MP4V')
-    #v = cv2.VideoWriter('video.mp4', fourcc, 10.0, resized_image_size)
 
     upsample = None
     if opts.upsample_model != None:
@@ -141,15 +125,12 @@ def inference(gpu, opts):
 
     i = 0
     while True:
-
         frame_start_time = time.time()
 
         action_text = ''
         if keyboard.is_pressed('e'):
             exit()
         elif keyboard.is_pressed('r') or prev_state is None:
-            # Run warmup to get initial values
-            # warmup is set to 0, so initial image is going to be used as input
             prev_state, warm_up_state, M, prev_read_v, prev_alpha, outputs, maps, alphas, alpha_losses, zs, base_imgs_all, _, \
                 hiddens, init_maps = netG.run_warmup(zdist, states, actions, warm_up, train=False)
             h, c = warm_up_state
@@ -175,26 +156,19 @@ def inference(gpu, opts):
 
             cv2.waitKey(1000)
 
-            # Uncomment to wite to the video stream
-            #for _ in range(30):
-            #    v.write(img)
-
             continue
         elif keyboard.is_pressed('a'):
-            action = torch.tensor([action_left], dtype=torch.float32).cuda()
+            action = torch.tensor([action_left], dtype=torch.float32).to(device)
             hidden_action = -1
-            #action_text = 'LEFT'
         elif keyboard.is_pressed('d'):
-            action = torch.tensor([action_right], dtype=torch.float32).cuda()
+            action = torch.tensor([action_right], dtype=torch.float32).to(device)
             hidden_action = 1
-            #action_text = 'RIGHT'
         elif no_action is not None:
-            action = torch.tensor([no_action], dtype=torch.float32).cuda()
+            action = torch.tensor([no_action], dtype=torch.float32).to(device)
             hidden_action = 0
         else:
-            action = torch.tensor([np.eye(opts.action_space)[random.randint(0, np.eye(opts.action_space) - 1)]], dtype=torch.float32).cuda()
+            action = torch.tensor([np.eye(opts.action_space)[random.randint(0, np.eye(opts.action_space) - 1)]], dtype=torch.float32).to(device)
             hidden_action = None
-        #print(action, action_text)
 
         # Perform inference
         prev_state, m, prev_alpha, alpha_loss, z, M, prev_read_v, h, c, init_map, base_imgs, _, cur_hidden = netG.run_step(prev_state, h, c, action, \
@@ -252,15 +226,9 @@ def inference(gpu, opts):
                 if len(upsampled_img) > 2:
                     cv2.imshow(f'{curdata} - upsampled aux2', upsampled_img[2][0][...,::-1])
 
-
-
-
         cv2.waitKey(1)
 
         i += 1
-
-        # Uncomment to wite to the video stream
-        #v.write(img)
 
         wait = 1/opts.playback_fps - (time.time() - frame_start_time)
         if wait > 0:
@@ -270,4 +238,9 @@ def inference(gpu, opts):
 if __name__ == '__main__':
     parser = config.init_parser()
     opts, args = parser.parse_args(sys.argv)
-    inference(opts.gpu, opts)
+
+    opts.gpu = -1  # CPU
+
+    device = torch.device('cuda' if opts.gpu >= 0 else 'cpu')
+
+    inference(device, opts)
