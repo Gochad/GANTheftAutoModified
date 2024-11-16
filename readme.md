@@ -72,7 +72,7 @@ To train your own model, follow the steps above, but run a training script inste
    ```
    or
    ```
-   scripts\gtav_inference_demo.bat
+   scripts\gtav_multi_demo.bat
    ```
 
 You'll need a GPU with at least 8 GB of VRAM.
